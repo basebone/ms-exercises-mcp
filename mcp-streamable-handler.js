@@ -276,6 +276,7 @@ class StreamableHTTPMCPServer {
     pipeline.push({
       $project: {
         _id: 1,
+        slug: 1,
         title: '$englishLocale.title',
         description: '$englishLocale.description',
         media: 1,
@@ -320,6 +321,7 @@ class StreamableHTTPMCPServer {
             text: JSON.stringify({
               exercises: exercises.map(exercise => ({
                 id: exercise._id,
+                slug: exercise.slug,
                 title: exercise.title || 'Untitled Exercise',
                 description: exercise.description,
                 media: exercise.media,
@@ -479,6 +481,7 @@ class StreamableHTTPMCPServer {
       {
         $project: {
           _id: 1,
+          slug: 1,
           title: '$englishLocale.title',
           description: '$englishLocale.description',
           media: 1,
@@ -506,6 +509,7 @@ class StreamableHTTPMCPServer {
           text: JSON.stringify({
             exercises: exercises.map(exercise => ({
               id: exercise._id,
+              slug: exercise.slug,
               title: exercise.title || 'Untitled Exercise',
               description: exercise.description,
               media: exercise.media,
