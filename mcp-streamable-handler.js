@@ -387,66 +387,134 @@ class StreamableHTTPMCPServer {
   }
 
   async searchExercises(args = {}) {
+    console.log('searchExercises called with args:', args);
     const { query, categories, difficulty, duration } = args;
     
-    const searchQuery = {
-      item_type: 'exercise',
-      published_at: { $ne: null }
+    // Build aggregation pipeline
+    const pipeline = [];
+    
+    // Stage 1: Match published exercises with search criteria
+    const matchStage = {
+      $match: {
+        item_type: 'exercise',
+        published_at: { $ne: null }
+      }
     };
 
-    if (query) {
-      searchQuery.$or = [
-        { 'content.title': { $regex: query, $options: 'i' } },
-        { 'content.description': { $regex: query, $options: 'i' } },
-        { 'content.instructions': { $regex: query, $options: 'i' } }
-      ];
-    }
-
+    // Add categories filter if specified
     if (categories && categories.length > 0) {
-      searchQuery.categories = { $in: categories };
+      matchStage.$match.categories = { $in: categories };
     }
 
+    // Add difficulty filter if specified
     if (difficulty) {
-      searchQuery['settings.difficulty'] = difficulty;
+      matchStage.$match['settings.difficulty'] = difficulty;
     }
 
+    // Add duration filter if specified
     if (duration) {
       if (duration.min !== undefined || duration.max !== undefined) {
-        searchQuery['settings.duration'] = {};
+        matchStage.$match['settings.duration'] = {};
         if (duration.min !== undefined) {
-          searchQuery['settings.duration'].$gte = duration.min;
+          matchStage.$match['settings.duration'].$gte = duration.min;
         }
         if (duration.max !== undefined) {
-          searchQuery['settings.duration'].$lte = duration.max;
+          matchStage.$match['settings.duration'].$lte = duration.max;
         }
       }
     }
 
-    const exercises = await ContentItems.find(searchQuery)
-      .populate('categories')
-      .sort({ published_at: -1 })
-      .lean();
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            exercises: exercises.map(exercise => ({
-              id: exercise._id,
-              title: exercise.content?.title || 'Untitled Exercise',
-              description: exercise.content?.description,
-              categories: exercise.categories,
-              difficulty: exercise.settings?.difficulty,
-              duration: exercise.settings?.duration,
-              published_at: exercise.published_at
-            })),
-            total: exercises.length,
-            searchQuery: args
-          }, null, 2)
+    pipeline.push(matchStage);
+    
+    // Stage 2: Add field to extract English locale data
+    pipeline.push({
+      $addFields: {
+        englishLocale: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: '$locale',
+                cond: { $eq: ['$$this.language_iso', 'en'] }
+              }
+            },
+            0
+          ]
         }
-      ]
-    };
+      }
+    });
+
+    // Stage 3: Add text search filter if query is specified (search in English locale)
+    if (query) {
+      pipeline.push({
+        $match: {
+          $or: [
+            { 'englishLocale.title': { $regex: query, $options: 'i' } },
+            { 'englishLocale.description': { $regex: query, $options: 'i' } },
+            { 'englishLocale.instructions': { $regex: query, $options: 'i' } }
+          ]
+        }
+      });
+    }
+    
+    // Stage 4: Project only the required fields
+    pipeline.push({
+      $project: {
+        _id: 1,
+        slug: 1,
+        title: '$englishLocale.title',
+        description: '$englishLocale.description',
+        media: 1,
+        content_metadata: 1,
+        published_at: 1,
+        categories: 1,
+        difficulty: '$settings.difficulty',
+        duration: '$settings.duration'
+      }
+    });
+    
+    // Stage 5: Sort by published_at descending
+    pipeline.push({
+      $sort: { published_at: -1 }
+    });
+
+    console.log('searchExercises - MongoDB aggregation pipeline:', JSON.stringify(pipeline, null, 2));
+
+    try {
+      console.log('searchExercises - executing aggregation...');
+      const startTime = Date.now();
+      
+      const exercises = await ContentItems.aggregate(pipeline);
+      
+      const queryTime = Date.now() - startTime;
+      console.log(`searchExercises - aggregation completed in ${queryTime}ms, found ${exercises.length} exercises`);
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              exercises: exercises.map(exercise => ({
+                id: exercise._id,
+                slug: exercise.slug,
+                title: exercise.title || 'Untitled Exercise',
+                description: exercise.description,
+                media: exercise.media,
+                content_metadata: exercise.content_metadata,
+                categories: exercise.categories,
+                difficulty: exercise.difficulty,
+                duration: exercise.duration,
+                published_at: exercise.published_at
+              })),
+              total: exercises.length,
+              searchQuery: args
+            }, null, 2)
+          }
+        ]
+      };
+    } catch (error) {
+      console.error('Error in searchExercises:', error);
+      throw new Error(`Failed to search exercises: ${error.message}`);
+    }
   }
 
   async getAllExercisesResource() {
