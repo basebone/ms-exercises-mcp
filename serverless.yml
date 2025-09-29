@@ -1,0 +1,52 @@
+# "org" ensures this Service is used with the correct Serverless Framework Access Key.
+org: baseplay
+# "app" enables Serverless Framework Dashboard features and sharing them with other Services.
+app: utilities
+# "service" is the name of this project. This will also be added to your AWS resource names.
+service: ms-exercise-mcp
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: 'eu-west-1'
+  deploymentBucket:
+    name: basebone.product.lambda.deployment.store
+  # Uncomment to easily set up a custom domain. Read the docs for more details:
+  # https://www.serverless.com/framework/docs/providers/aws/guide/domains
+  # domain: api.example.com
+
+plugins:
+  - serverless-offline
+
+custom:
+  serverless-offline:
+    httpPort: 3001
+    host: localhost
+    reloadHandler: true
+    noTimeout: true
+
+functions:
+  mcpPost:
+    handler: mcp-streamable-handler.mcpPost
+    events:
+      - httpApi:
+          path: /mcp
+          method: post
+    environment:
+      MONGODB_URI: ${env:MONGODB_URI, 'mongodb://localhost:27017/main_store'}
+
+  mcpGet:
+    handler: mcp-streamable-handler.mcpGet
+    events:
+      - httpApi:
+          path: /mcp
+          method: get
+    environment:
+      MONGODB_URI: ${env:MONGODB_URI, 'mongodb://localhost:27017/main_store'}
+
+  mcpOptions:
+    handler: mcp-streamable-handler.mcpOptions
+    events:
+      - httpApi:
+          path: /mcp
+          method: options
