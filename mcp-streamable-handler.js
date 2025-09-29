@@ -229,38 +229,85 @@ class StreamableHTTPMCPServer {
     console.log('getExercises called with args:', args);
     const { limit = 10, skip = 0, category, search } = args;
     
-    const query = {
-      item_type: 'exercise',
-      published_at: { $ne: null }
+    // Build aggregation pipeline
+    const pipeline = [];
+    
+    // Stage 1: Match published exercises
+    const matchStage = {
+      $match: {
+        item_type: 'exercise',
+        published_at: { $ne: null }
+      }
     };
-
+    
+    // Add category filter if specified
     if (category) {
-      query.categories = category;
+      matchStage.$match.categories = category;
     }
-
+    
+    // Add search filter if specified (search in English locale)
     if (search) {
-      query.$or = [
-        { 'content.title': { $regex: search, $options: 'i' } },
-        { 'content.description': { $regex: search, $options: 'i' } }
+      matchStage.$match.$or = [
+        { 'locale.title': { $regex: search, $options: 'i' } },
+        { 'locale.description': { $regex: search, $options: 'i' } }
       ];
     }
+    
+    pipeline.push(matchStage);
+    
+    // Stage 2: Add field to extract English locale data
+    pipeline.push({
+      $addFields: {
+        englishLocale: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: '$locale',
+                cond: { $eq: ['$$this.language_iso', 'en'] }
+              }
+            },
+            0
+          ]
+        }
+      }
+    });
+    
+    // Stage 3: Project only the required fields
+    pipeline.push({
+      $project: {
+        _id: 1,
+        title: '$englishLocale.title',
+        description: '$englishLocale.description',
+        media: 1,
+        content_metadata: 1,
+        published_at: 1,
+        categories: 1
+      }
+    });
+    
+    // Stage 4: Sort by published_at descending
+    pipeline.push({
+      $sort: { published_at: -1 }
+    });
+    
+    // Stage 5: Skip and limit for pagination
+    if (skip > 0) {
+      pipeline.push({ $skip: skip });
+    }
+    
+    pipeline.push({ $limit: limit });
 
-    console.log('MongoDB query:', JSON.stringify(query));
+    console.log('MongoDB aggregation pipeline:', JSON.stringify(pipeline, null, 2));
     console.log('Query options - limit:', limit, 'skip:', skip);
 
     try {
-      console.log('Executing MongoDB query...');
+      console.log('Executing MongoDB aggregation...');
       const startTime = Date.now();
       
-      const exercises = await ContentItems.find(query)
-        .limit(limit)
-        .skip(skip)
-        .sort({ published_at: -1 })
-        .populate('categories')
-        .lean();
+      const exercises = await ContentItems.aggregate(pipeline);
       
       const queryTime = Date.now() - startTime;
-      console.log(`MongoDB query completed in ${queryTime}ms, found ${exercises.length} exercises`);
+      console.log(`MongoDB aggregation completed in ${queryTime}ms, found ${exercises.length} exercises`);
       
       if (exercises.length === 0) {
         console.log('No exercises found - this might indicate a database connection or data issue');
@@ -273,12 +320,12 @@ class StreamableHTTPMCPServer {
             text: JSON.stringify({
               exercises: exercises.map(exercise => ({
                 id: exercise._id,
-                title: exercise.content?.title || 'Untitled Exercise',
-                description: exercise.content?.description,
-                categories: exercise.categories,
+                title: exercise.title || 'Untitled Exercise',
+                description: exercise.description,
+                media: exercise.media,
+                content_metadata: exercise.content_metadata,
                 published_at: exercise.published_at,
-                content_type: exercise.content_type,
-                media: exercise.media
+                categories: exercise.categories
               })),
               total: exercises.length,
               limit,
@@ -401,13 +448,55 @@ class StreamableHTTPMCPServer {
   }
 
   async getAllExercisesResource() {
-    const exercises = await ContentItems.find({
-      item_type: 'exercise',
-      published_at: { $ne: null }
-    })
-    .populate('categories')
-    .sort({ published_at: -1 })
-    .lean();
+    // Build aggregation pipeline for English locale filtering
+    const pipeline = [
+      // Stage 1: Match published exercises
+      {
+        $match: {
+          item_type: 'exercise',
+          published_at: { $ne: null }
+        }
+      },
+      
+      // Stage 2: Add field to extract English locale data
+      {
+        $addFields: {
+          englishLocale: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: '$locale',
+                  cond: { $eq: ['$$this.language_iso', 'en'] }
+                }
+              },
+              0
+            ]
+          }
+        }
+      },
+      
+      // Stage 3: Project only the required fields
+      {
+        $project: {
+          _id: 1,
+          title: '$englishLocale.title',
+          description: '$englishLocale.description',
+          media: 1,
+          content_metadata: 1,
+          published_at: 1,
+          categories: 1
+        }
+      },
+      
+      // Stage 4: Sort by published_at descending
+      {
+        $sort: { published_at: -1 }
+      }
+    ];
+
+    console.log('getAllExercisesResource - executing aggregation pipeline');
+    const exercises = await ContentItems.aggregate(pipeline);
+    console.log(`getAllExercisesResource - found ${exercises.length} exercises`);
 
     return {
       contents: [
@@ -417,11 +506,12 @@ class StreamableHTTPMCPServer {
           text: JSON.stringify({
             exercises: exercises.map(exercise => ({
               id: exercise._id,
-              title: exercise.content?.title || 'Untitled Exercise',
-              description: exercise.content?.description,
+              title: exercise.title || 'Untitled Exercise',
+              description: exercise.description,
+              media: exercise.media,
+              content_metadata: exercise.content_metadata,
               categories: exercise.categories,
-              published_at: exercise.published_at,
-              content_type: exercise.content_type
+              published_at: exercise.published_at
             })),
             total: exercises.length
           }, null, 2)
