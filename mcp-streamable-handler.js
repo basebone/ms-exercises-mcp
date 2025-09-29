@@ -232,11 +232,11 @@ class StreamableHTTPMCPServer {
     // Build aggregation pipeline
     const pipeline = [];
     
-    // Stage 1: Match published exercises
+    // Stage 1: Match exercises with content_metadata
     const matchStage = {
       $match: {
         item_type: 'exercise',
-        published_at: { $ne: null }
+        content_metadata: { $exists: true, $ne: null }
       }
     };
     
@@ -352,7 +352,7 @@ class StreamableHTTPMCPServer {
     const exercise = await ContentItems.findOne({
       _id: id,
       item_type: 'exercise',
-      published_at: { $ne: null }
+      content_metadata: { $exists: true, $ne: null }
     })
     .populate('categories')
     .populate('creator')
@@ -393,11 +393,11 @@ class StreamableHTTPMCPServer {
     // Build aggregation pipeline
     const pipeline = [];
     
-    // Stage 1: Match published exercises with search criteria
+    // Stage 1: Match exercises with content_metadata and search criteria
     const matchStage = {
       $match: {
         item_type: 'exercise',
-        published_at: { $ne: null }
+        content_metadata: { $exists: true, $ne: null }
       }
     };
 
@@ -520,11 +520,11 @@ class StreamableHTTPMCPServer {
   async getAllExercisesResource() {
     // Build aggregation pipeline for English locale filtering
     const pipeline = [
-      // Stage 1: Match published exercises
+      // Stage 1: Match exercises with content_metadata
       {
         $match: {
           item_type: 'exercise',
-          published_at: { $ne: null }
+          content_metadata: { $exists: true, $ne: null }
         }
       },
       
@@ -595,7 +595,7 @@ class StreamableHTTPMCPServer {
   async getCategoriesResource() {
     const categories = await ContentItems.distinct('categories', {
       item_type: 'exercise',
-      published_at: { $ne: null }
+      content_metadata: { $exists: true, $ne: null }
     });
 
     return {
@@ -617,7 +617,7 @@ class StreamableHTTPMCPServer {
       {
         $match: {
           item_type: 'exercise',
-          published_at: { $ne: null }
+          content_metadata: { $exists: true, $ne: null }
         }
       },
       {
@@ -632,7 +632,7 @@ class StreamableHTTPMCPServer {
 
     const categoryCount = await ContentItems.distinct('categories', {
       item_type: 'exercise',
-      published_at: { $ne: null }
+      content_metadata: { $exists: true, $ne: null }
     });
 
     return {
