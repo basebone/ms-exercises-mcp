@@ -553,15 +553,8 @@ class StreamableHTTPMCPServer {
           title: '$englishLocale.title',
           description: '$englishLocale.description',
           media: 1,
-          content_metadata: 1,
-          published_at: 1,
-          categories: 1
+          content_metadata: 1
         }
-      },
-      
-      // Stage 4: Sort by published_at descending
-      {
-        $sort: { published_at: -1 }
       }
     ];
 
@@ -581,9 +574,7 @@ class StreamableHTTPMCPServer {
               title: exercise.title || 'Untitled Exercise',
               description: exercise.description,
               media: exercise.media,
-              content_metadata: exercise.content_metadata,
-              categories: exercise.categories,
-              published_at: exercise.published_at
+              content_metadata: exercise.content_metadata
             })),
             total: exercises.length
           }, null, 2)
