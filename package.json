@@ -12,7 +12,7 @@
     "@baseplay/models": "^2.5.1",
     "@modelcontextprotocol/sdk": "^1.18.1",
     "mongoose": "^8.18.2",
-    "uuid": "^13.0.0"
+    "uuid": "^9.0.1"
   },
   "keywords": [
     "serverless",

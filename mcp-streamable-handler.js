@@ -2,6 +2,7 @@ const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
 const { CallToolRequestSchema, ListToolsRequestSchema, ListResourcesRequestSchema, ReadResourceRequestSchema } = require('@modelcontextprotocol/sdk/types.js');
 const { ContentItems } = require('@baseplay/models');
 const mongoose = require('mongoose');
+const { v4: uuidv4 } = require('uuid');
 
 class StreamableHTTPMCPServer {
   constructor() {
@@ -103,6 +104,105 @@ class StreamableHTTPMCPServer {
                 }
               }
             }
+          },
+          {
+            name: 'create_workout_program',
+            description: 'Create a workout program with multiple workouts in the database',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                program: {
+                  type: 'object',
+                  properties: {
+                    title: { type: 'string', description: 'Program title' },
+                    summary: { type: 'string', description: 'Program summary' },
+                    description: { type: 'string', description: 'Program description' },
+                    slug: { type: 'string', description: 'URL-friendly slug (optional, will be generated if not provided)' },
+                    categories: { type: 'array', items: { type: 'string' }, description: 'Array of category IDs' },
+                    creator: { type: 'string', description: 'Creator user ID' },
+                    is_premium: { type: 'boolean', description: 'Whether the program is premium', default: false },
+                    content_metadata: {
+                      type: 'object',
+                      properties: {
+                        duration_weeks: { type: 'string', description: 'Program duration in weeks' },
+                        frequency: { type: 'string', description: 'Workouts per week' },
+                        difficulty: { type: 'string', description: 'Program difficulty level' },
+                        workout_type: { type: 'string', description: 'Type of workout program' }
+                      }
+                    }
+                  },
+                  required: ['title', 'summary', 'description', 'creator']
+                },
+                workouts: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      title: { type: 'string', description: 'Workout title' },
+                      summary: { type: 'string', description: 'Workout summary' },
+                      description: { type: 'string', description: 'Workout description' },
+                      slug: { type: 'string', description: 'URL-friendly slug (optional, will be generated if not provided)' },
+                      categories: { type: 'array', items: { type: 'string' }, description: 'Array of category IDs' },
+                      creator: { type: 'string', description: 'Creator user ID' },
+                      is_premium: { type: 'boolean', description: 'Whether the workout is premium', default: false },
+                      content_metadata: {
+                        type: 'object',
+                        properties: {
+                          difficulty: { type: 'string', description: 'Workout difficulty level' },
+                          calories_burned: { type: 'string', description: 'Estimated calories burned' },
+                          location: { type: 'string', description: 'Workout location (e.g., home, gym)' },
+                          workout_type: { type: 'string', description: 'Type of workout' },
+                          total_duration: { type: 'number', description: 'Total workout duration in seconds' },
+                          exercise_count: { type: 'number', description: 'Number of exercises in workout' }
+                        }
+                      },
+                      sections: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            label: { type: 'string', description: 'Section label' },
+                            position: { type: 'number', description: 'Section position' },
+                            items: {
+                              type: 'array',
+                              items: {
+                                type: 'object',
+                                properties: {
+                                  _id: { type: 'string', description: 'Exercise ID' },
+                                  position: { type: 'number', description: 'Exercise position' },
+                                  easy: { type: 'number', description: 'Duration for easy difficulty' },
+                                  medium: { type: 'number', description: 'Duration for medium difficulty' },
+                                  hard: { type: 'number', description: 'Duration for hard difficulty' }
+                                },
+                                required: ['_id', 'position', 'easy', 'medium', 'hard']
+                              }
+                            },
+                            rest: { type: 'string', description: 'Rest time between exercises' },
+                            reps: { type: 'string', description: 'Number of repetitions' }
+                          },
+                          required: ['label', 'position', 'items']
+                        }
+                      }
+                    },
+                    required: ['title', 'summary', 'description', 'creator', 'sections']
+                  },
+                  description: 'Array of workouts to create'
+                },
+                program_schedule: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      day: { type: 'number', description: 'Day number in the program' },
+                      workout_index: { type: 'number', description: 'Index of the workout in the workouts array' }
+                    },
+                    required: ['day', 'workout_index']
+                  },
+                  description: 'Schedule mapping days to workout indices'
+                }
+              },
+              required: ['program', 'workouts', 'program_schedule']
+            }
           }
         ]
       };
@@ -122,6 +222,8 @@ class StreamableHTTPMCPServer {
             return await this.getExerciseById(args);
           case 'search_exercises':
             return await this.searchExercises(args);
+          case 'create_workout_program':
+            return await this.createWorkoutProgram(args);
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
@@ -642,6 +744,236 @@ class StreamableHTTPMCPServer {
     };
   }
 
+  // Helper function to generate slug from title
+  generateSlug(title) {
+    return title
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '') // Remove special characters
+      .replace(/\s+/g, '-') // Replace spaces with hyphens
+      .replace(/-+/g, '-') // Replace multiple hyphens with single
+      .trim('-'); // Remove leading/trailing hyphens
+  }
+
+  // Helper function to create locale array
+  createLocaleArray(title, summary, description, language = 'en') {
+    return [{
+      language_iso: language,
+      title,
+      summary,
+      description,
+      seo_title: null,
+      seo_summary: null,
+      seo_description: null,
+      specify_seo_values: false
+    }];
+  }
+
+  // Helper function to create default content item structure
+  createDefaultContentItem(type) {
+    const now = new Date();
+    return {
+      _id: uuidv4(),
+      item_type: type,
+      content_type: type,
+      media: [],
+      content: {
+        src: null,
+        extension: null,
+        text: null,
+        quality: null,
+        size: null,
+        size_unit: null
+      },
+      settings: {
+        is_exclusive: false,
+        is_premium: false,
+        allowed_domains: [],
+        excluded_domains: [],
+        excluded_countries_iso: [],
+        excluded_network_endpoints: [],
+        age_rating: 'PG'
+      },
+      social_stats: {
+        likes: 0,
+        comments: 0,
+        views: 0,
+        rating: 0
+      },
+      top_comments: [{
+        id: null,
+        user_id: null,
+        commentor_name: null,
+        comment: null,
+        parent_id: null,
+        ancestor_ids: [],
+        created_at: null
+      }],
+      collections: [],
+      is_indexed: true,
+      locks: {
+        is_locked_for_editing: false,
+        current_editor: null,
+        is_locked_for_moderation_process: false,
+        is_locked_for_backend_process: false,
+        current_backend_process: null
+      },
+      internal_meta: {
+        rating: 5,
+        tags: []
+      },
+      language: 'en',
+      published_at: now,
+      collection_type: type,
+      is_featured: false,
+      is_spotlight: false,
+      contents: [],
+      created_at: now,
+      updated_at: now,
+      __v: 0,
+      curation_scores: {
+        usage: 0,
+        recent_usage: 0,
+        os: { android: 0, ios: 0, windows: 0, mac: 0 },
+        featured: { baseplay_theme_base: 0, baseplay_theme_one: 0, baseplay_theme_two: 0, baseplay_theme_three: 0, baseplay_theme_four: 0 },
+        trending: { baseplay_theme_base: 0, baseplay_theme_one: 0, baseplay_theme_two: 0, baseplay_theme_three: 0, baseplay_theme_four: 0 },
+        spotlight: { baseplay_theme_base: 0, baseplay_theme_one: 0, baseplay_theme_two: 0, baseplay_theme_three: 0, baseplay_theme_four: 0 },
+        topten: { baseplay_theme_base: 0, baseplay_theme_one: 0, baseplay_theme_two: 0, baseplay_theme_three: 0, baseplay_theme_four: 0 },
+        topics: { baseplay_theme_base: 0, baseplay_theme_one: 0, baseplay_theme_two: 0, baseplay_theme_three: 0, baseplay_theme_four: 0 }
+      }
+    };
+  }
+
+  async createWorkoutProgram(args) {
+    console.log('createWorkoutProgram called with args:', JSON.stringify(args, null, 2));
+    
+    const { program, workouts, program_schedule } = args;
+    
+    // Validate required fields
+    if (!program || !workouts || !program_schedule) {
+      throw new Error('Missing required fields: program, workouts, and program_schedule are required');
+    }
+    
+    if (!Array.isArray(workouts) || workouts.length === 0) {
+      throw new Error('At least one workout is required');
+    }
+    
+    if (!Array.isArray(program_schedule) || program_schedule.length === 0) {
+      throw new Error('Program schedule is required');
+    }
+    
+    // Validate program schedule references
+    for (const scheduleItem of program_schedule) {
+      if (scheduleItem.workout_index >= workouts.length || scheduleItem.workout_index < 0) {
+        throw new Error(`Invalid workout_index ${scheduleItem.workout_index} in program_schedule. Must be between 0 and ${workouts.length - 1}`);
+      }
+    }
+    
+    try {
+      console.log('Starting workout program creation...');
+      
+      // Step 1: Create all workouts first
+      const createdWorkouts = [];
+      
+      for (let i = 0; i < workouts.length; i++) {
+        const workout = workouts[i];
+        console.log(`Creating workout ${i + 1}/${workouts.length}: ${workout.title}`);
+        
+        // Create workout document
+        const workoutDoc = this.createDefaultContentItem('workouts');
+        
+        // Set workout-specific fields
+        workoutDoc.slug = workout.slug || this.generateSlug(workout.title);
+        workoutDoc.locale = this.createLocaleArray(workout.title, workout.summary, workout.description);
+        workoutDoc.creator = workout.creator;
+        workoutDoc.categories = workout.categories || [];
+        workoutDoc.settings.is_premium = workout.is_premium || false;
+        workoutDoc.content_metadata = workout.content_metadata || {};
+        workoutDoc.sections = workout.sections || [];
+        
+        // Calculate total duration from sections if not provided
+        if (!workoutDoc.content_metadata.total_duration && workout.sections) {
+          let totalDuration = 0;
+          let exerciseCount = 0;
+          
+          for (const section of workout.sections) {
+            if (section.items) {
+              for (const item of section.items) {
+                // Use medium difficulty as default for duration calculation
+                totalDuration += item.medium || item.easy || item.hard || 0;
+                exerciseCount++;
+              }
+            }
+          }
+          
+          workoutDoc.content_metadata.total_duration = totalDuration;
+          workoutDoc.content_metadata.exercise_count = exerciseCount;
+        }
+        
+        // Save workout to database
+        const savedWorkout = await ContentItems.create(workoutDoc);
+        createdWorkouts.push(savedWorkout);
+        console.log(`Workout created with ID: ${savedWorkout._id}`);
+      }
+      
+      // Step 2: Create the program with references to the created workouts
+      console.log('Creating workout program...');
+      
+      const programDoc = this.createDefaultContentItem('workout-program');
+      
+      // Set program-specific fields
+      programDoc.slug = program.slug || this.generateSlug(program.title);
+      programDoc.locale = this.createLocaleArray(program.title, program.summary, program.description);
+      programDoc.creator = program.creator;
+      programDoc.categories = program.categories || [];
+      programDoc.settings.is_premium = program.is_premium || false;
+      programDoc.content_metadata = program.content_metadata || {};
+      
+      // Create sections array mapping days to workout IDs
+      programDoc.sections = program_schedule.map(scheduleItem => {
+        const workout = createdWorkouts[scheduleItem.workout_index];
+        return {
+          day: scheduleItem.day,
+          duration: workout.content_metadata?.total_duration || 0,
+          workout: workout._id
+        };
+      });
+      
+      // Save program to database
+      const savedProgram = await ContentItems.create(programDoc);
+      console.log(`Program created with ID: ${savedProgram._id}`);
+      
+      // Return success response
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              success: true,
+              program: {
+                id: savedProgram._id,
+                title: program.title,
+                slug: savedProgram.slug,
+                created_at: savedProgram.created_at
+              },
+              workouts: createdWorkouts.map((workout, index) => ({
+                id: workout._id,
+                title: workouts[index].title,
+                slug: workout.slug,
+                created_at: workout.created_at
+              })),
+              schedule: programDoc.sections,
+              message: `Successfully created workout program '${program.title}' with ${createdWorkouts.length} workouts`
+            }, null, 2)
+          }
+        ]
+      };
+      
+    } catch (error) {
+      console.error('Error in createWorkoutProgram:', error);
+      throw new Error(`Failed to create workout program: ${error.message}`);
+    }
+  }
+
   // Create SSE stream response
   createSSEResponse(sessionId) {
     return {
@@ -683,6 +1015,8 @@ class StreamableHTTPMCPServer {
           return await this.getExerciseById(args);
         case 'search_exercises':
           return await this.searchExercises(args);
+        case 'create_workout_program':
+          return await this.createWorkoutProgram(args);
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
@@ -848,6 +1182,105 @@ exports.mcpPost = async (event) => {
                       difficulty: { type: 'string', description: 'Filter by difficulty level' },
                       duration: { type: 'object', properties: { min: { type: 'number' }, max: { type: 'number' } }, description: 'Filter by exercise duration range' }
                     }
+                  }
+                },
+                {
+                  name: 'create_workout_program',
+                  description: 'Create a workout program with multiple workouts in the database',
+                  inputSchema: {
+                    type: 'object',
+                    properties: {
+                      program: {
+                        type: 'object',
+                        properties: {
+                          title: { type: 'string', description: 'Program title' },
+                          summary: { type: 'string', description: 'Program summary' },
+                          description: { type: 'string', description: 'Program description' },
+                          slug: { type: 'string', description: 'URL-friendly slug (optional, will be generated if not provided)' },
+                          categories: { type: 'array', items: { type: 'string' }, description: 'Array of category IDs' },
+                          creator: { type: 'string', description: 'Creator user ID' },
+                          is_premium: { type: 'boolean', description: 'Whether the program is premium', default: false },
+                          content_metadata: {
+                            type: 'object',
+                            properties: {
+                              duration_weeks: { type: 'string', description: 'Program duration in weeks' },
+                              frequency: { type: 'string', description: 'Workouts per week' },
+                              difficulty: { type: 'string', description: 'Program difficulty level' },
+                              workout_type: { type: 'string', description: 'Type of workout program' }
+                            }
+                          }
+                        },
+                        required: ['title', 'summary', 'description', 'creator']
+                      },
+                      workouts: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            title: { type: 'string', description: 'Workout title' },
+                            summary: { type: 'string', description: 'Workout summary' },
+                            description: { type: 'string', description: 'Workout description' },
+                            slug: { type: 'string', description: 'URL-friendly slug (optional, will be generated if not provided)' },
+                            categories: { type: 'array', items: { type: 'string' }, description: 'Array of category IDs' },
+                            creator: { type: 'string', description: 'Creator user ID' },
+                            is_premium: { type: 'boolean', description: 'Whether the workout is premium', default: false },
+                            content_metadata: {
+                              type: 'object',
+                              properties: {
+                                difficulty: { type: 'string', description: 'Workout difficulty level' },
+                                calories_burned: { type: 'string', description: 'Estimated calories burned' },
+                                location: { type: 'string', description: 'Workout location (e.g., home, gym)' },
+                                workout_type: { type: 'string', description: 'Type of workout' },
+                                total_duration: { type: 'number', description: 'Total workout duration in seconds' },
+                                exercise_count: { type: 'number', description: 'Number of exercises in workout' }
+                              }
+                            },
+                            sections: {
+                              type: 'array',
+                              items: {
+                                type: 'object',
+                                properties: {
+                                  label: { type: 'string', description: 'Section label' },
+                                  position: { type: 'number', description: 'Section position' },
+                                  items: {
+                                    type: 'array',
+                                    items: {
+                                      type: 'object',
+                                      properties: {
+                                        _id: { type: 'string', description: 'Exercise ID' },
+                                        position: { type: 'number', description: 'Exercise position' },
+                                        easy: { type: 'number', description: 'Duration for easy difficulty' },
+                                        medium: { type: 'number', description: 'Duration for medium difficulty' },
+                                        hard: { type: 'number', description: 'Duration for hard difficulty' }
+                                      },
+                                      required: ['_id', 'position', 'easy', 'medium', 'hard']
+                                    }
+                                  },
+                                  rest: { type: 'string', description: 'Rest time between exercises' },
+                                  reps: { type: 'string', description: 'Number of repetitions' }
+                                },
+                                required: ['label', 'position', 'items']
+                              }
+                            }
+                          },
+                          required: ['title', 'summary', 'description', 'creator', 'sections']
+                        },
+                        description: 'Array of workouts to create'
+                      },
+                      program_schedule: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            day: { type: 'number', description: 'Day number in the program' },
+                            workout_index: { type: 'number', description: 'Index of the workout in the workouts array' }
+                          },
+                          required: ['day', 'workout_index']
+                        },
+                        description: 'Schedule mapping days to workout indices'
+                      }
+                    },
+                    required: ['program', 'workouts', 'program_schedule']
                   }
                 }
               ]
