@@ -272,18 +272,6 @@ class StreamableHTTPMCPServer {
             name: 'All Exercises',
             description: 'Complete list of all published exercises',
             mimeType: 'application/json'
-          },
-          {
-            uri: 'exercise://categories',
-            name: 'Exercise Categories',
-            description: 'List of all exercise categories',
-            mimeType: 'application/json'
-          },
-          {
-            uri: 'exercise://stats',
-            name: 'Exercise Statistics',
-            description: 'Statistics about exercises in the database',
-            mimeType: 'application/json'
           }
         ]
       };
@@ -299,10 +287,6 @@ class StreamableHTTPMCPServer {
         switch (uri) {
           case 'exercise://exercises':
             return await this.getAllExercisesResource();
-          case 'exercise://categories':
-            return await this.getCategoriesResource();
-          case 'exercise://stats':
-            return await this.getStatsResource();
           default:
             throw new Error(`Unknown resource: ${uri}`);
         }
@@ -813,64 +797,6 @@ class StreamableHTTPMCPServer {
     };
   }
 
-  async getCategoriesResource() {
-    const categories = await ContentItems.distinct('categories', {
-      item_type: 'exercise',
-      content_metadata: { $exists: true, $ne: null }
-    });
-
-    return {
-      contents: [
-        {
-          uri: 'exercise://categories',
-          mimeType: 'application/json',
-          text: JSON.stringify({
-            categories,
-            total: categories.length
-          }, null, 2)
-        }
-      ]
-    };
-  }
-
-  async getStatsResource() {
-    const stats = await ContentItems.aggregate([
-      {
-        $match: {
-          item_type: 'exercise',
-          content_metadata: { $exists: true, $ne: null }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: 1 },
-          avgDuration: { $avg: '$settings.duration' },
-          categories: { $addToSet: '$categories' }
-        }
-      }
-    ]);
-
-    const categoryCount = await ContentItems.distinct('categories', {
-      item_type: 'exercise',
-      content_metadata: { $exists: true, $ne: null }
-    });
-
-    return {
-      contents: [
-        {
-          uri: 'exercise://stats',
-          mimeType: 'application/json',
-          text: JSON.stringify({
-            totalExercises: stats[0]?.total || 0,
-            averageDuration: stats[0]?.avgDuration || 0,
-            totalCategories: categoryCount.length,
-            lastUpdated: new Date().toISOString()
-          }, null, 2)
-        }
-      ]
-    };
-  }
 
   // Helper function to generate slug from title
   generateSlug(title) {
@@ -1179,10 +1105,6 @@ class StreamableHTTPMCPServer {
       switch (uri) {
         case 'exercise://exercises':
           return await this.getAllExercisesResource();
-        case 'exercise://categories':
-          return await this.getCategoriesResource();
-        case 'exercise://stats':
-          return await this.getStatsResource();
         default:
           throw new Error(`Unknown resource: ${uri}`);
       }

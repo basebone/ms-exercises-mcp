@@ -147,18 +147,6 @@ class ExerciseMCPServer {
             name: 'All Exercises',
             description: 'Complete list of all published exercises',
             mimeType: 'application/json'
-          },
-          {
-            uri: 'exercise://categories',
-            name: 'Exercise Categories',
-            description: 'List of all exercise categories',
-            mimeType: 'application/json'
-          },
-          {
-            uri: 'exercise://stats',
-            name: 'Exercise Statistics',
-            description: 'Statistics about exercises in the database',
-            mimeType: 'application/json'
           }
         ]
       };
@@ -174,10 +162,6 @@ class ExerciseMCPServer {
         switch (uri) {
           case 'exercise://exercises':
             return await this.getAllExercisesResource();
-          case 'exercise://categories':
-            return await this.getCategoriesResource();
-          case 'exercise://stats':
-            return await this.getStatsResource();
           default:
             throw new Error(`Unknown resource: ${uri}`);
         }
@@ -388,64 +372,6 @@ class ExerciseMCPServer {
     };
   }
 
-  async getCategoriesResource() {
-    const categories = await ContentItems.distinct('categories', {
-      item_type: 'exercise',
-      published_at: { $ne: null }
-    });
-
-    return {
-      contents: [
-        {
-          uri: 'exercise://categories',
-          mimeType: 'application/json',
-          text: JSON.stringify({
-            categories,
-            total: categories.length
-          }, null, 2)
-        }
-      ]
-    };
-  }
-
-  async getStatsResource() {
-    const stats = await ContentItems.aggregate([
-      {
-        $match: {
-          item_type: 'exercise',
-          published_at: { $ne: null }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: 1 },
-          avgDuration: { $avg: '$settings.duration' },
-          categories: { $addToSet: '$categories' }
-        }
-      }
-    ]);
-
-    const categoryCount = await ContentItems.distinct('categories', {
-      item_type: 'exercise',
-      published_at: { $ne: null }
-    });
-
-    return {
-      contents: [
-        {
-          uri: 'exercise://stats',
-          mimeType: 'application/json',
-          text: JSON.stringify({
-            totalExercises: stats[0]?.total || 0,
-            averageDuration: stats[0]?.avgDuration || 0,
-            totalCategories: categoryCount.length,
-            lastUpdated: new Date().toISOString()
-          }, null, 2)
-        }
-      ]
-    };
-  }
 
   async run() {
     const transport = new StdioServerTransport();
