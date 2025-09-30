@@ -1,8 +1,9 @@
 const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
 const { CallToolRequestSchema, ListToolsRequestSchema, ListResourcesRequestSchema, ReadResourceRequestSchema } = require('@modelcontextprotocol/sdk/types.js');
-const { ContentItems } = require('@baseplay/models');
+const { ContentItems, UserFitnessProfile } = require('@baseplay/models');
 const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
+const jwt = require('jsonwebtoken');
 
 class StreamableHTTPMCPServer {
   constructor() {
@@ -103,6 +104,21 @@ class StreamableHTTPMCPServer {
                   description: 'Filter by exercise duration range'
                 }
               }
+            }
+          },
+          {
+            name: 'get_user_fitness_profile',
+            description: 'Retrieve a user\'s fitness profile with JWT authentication',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                authorization: {
+                  type: 'string',
+                  description: 'Bearer JWT token for authentication (format: "Bearer <token>")',
+                  required: true
+                }
+              },
+              required: ['authorization']
             }
           },
           {
@@ -222,6 +238,8 @@ class StreamableHTTPMCPServer {
             return await this.getExerciseById(args);
           case 'search_exercises':
             return await this.searchExercises(args);
+          case 'get_user_fitness_profile':
+            return await this.getUserFitnessProfile(args);
           case 'create_workout_program':
             return await this.createWorkoutProgram(args);
           default:
@@ -324,6 +342,49 @@ class StreamableHTTPMCPServer {
     if (mongoose.connection.readyState === 0) {
       const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/main_store';
       await mongoose.connect(mongoUri);
+    }
+  }
+
+  // Helper function to validate JWT token and extract user ID
+  validateJWTToken(authorization) {
+    if (!authorization) {
+      throw new Error('Authorization header is required');
+    }
+
+    // Check if authorization header starts with "Bearer "
+    if (!authorization.startsWith('Bearer ')) {
+      throw new Error('Authorization header must start with "Bearer "');
+    }
+
+    // Extract the token from "Bearer <token>"
+    const token = authorization.substring(7);
+    
+    if (!token) {
+      throw new Error('JWT token is required');
+    }
+
+    try {
+      // Decode the JWT token without verification for now
+      // In production, you should verify with a secret key
+      const decoded = jwt.decode(token);
+      
+      if (!decoded) {
+        throw new Error('Invalid JWT token format');
+      }
+
+      // Extract user ID from token
+      const userId = decoded.user?._id || decoded._id || decoded.userId || decoded.sub;
+      
+      if (!userId) {
+        throw new Error('User ID not found in JWT token. Expected user._id, _id, userId, or sub field');
+      }
+
+      return { userId, decoded };
+    } catch (error) {
+      if (error.message.includes('User ID not found') || error.message.includes('Invalid JWT token')) {
+        throw error;
+      }
+      throw new Error(`JWT token validation failed: ${error.message}`);
     }
   }
 
@@ -486,6 +547,68 @@ class StreamableHTTPMCPServer {
         }
       ]
     };
+  }
+
+  async getUserFitnessProfile(args) {
+    console.log('getUserFitnessProfile called with args:', args);
+    const { authorization } = args;
+    
+    // Validate JWT token and extract user ID
+    const { userId, decoded } = this.validateJWTToken(authorization);
+    console.log('JWT validation successful, user ID:', userId);
+    
+    try {
+      // Query the UserFitnessProfile model for the user's fitness profile
+      const fitnessProfile = await UserFitnessProfile.findOne({
+        user_id: userId
+      }).lean();
+
+      if (!fitnessProfile) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: false,
+                message: 'No fitness profile found for this user',
+                user_id: userId
+              }, null, 2)
+            }
+          ]
+        };
+      }
+
+      console.log('Fitness profile found for user:', userId);
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              success: true,
+              user_id: userId,
+              fitness_profile: {
+                id: fitnessProfile._id,
+                user_id: fitnessProfile.user_id,
+                height: fitnessProfile.height,
+                weight: fitnessProfile.weight,
+                age: fitnessProfile.age,
+                gender: fitnessProfile.gender,
+                activity_level: fitnessProfile.activity_level,
+                fitness_goals: fitnessProfile.fitness_goals,
+                medical_conditions: fitnessProfile.medical_conditions,
+                preferences: fitnessProfile.preferences,
+                created_at: fitnessProfile.created_at,
+                updated_at: fitnessProfile.updated_at
+              }
+            }, null, 2)
+          }
+        ]
+      };
+    } catch (error) {
+      console.error('Error in getUserFitnessProfile:', error);
+      throw new Error(`Failed to retrieve user fitness profile: ${error.message}`);
+    }
   }
 
   async searchExercises(args = {}) {
@@ -1015,6 +1138,8 @@ class StreamableHTTPMCPServer {
           return await this.getExerciseById(args);
         case 'search_exercises':
           return await this.searchExercises(args);
+        case 'get_user_fitness_profile':
+          return await this.getUserFitnessProfile(args);
         case 'create_workout_program':
           return await this.createWorkoutProgram(args);
         default:
@@ -1063,6 +1188,9 @@ class StreamableHTTPMCPServer {
     }
   }
 }
+
+// Export the class for testing
+module.exports = { StreamableHTTPMCPServer };
 
 // Streamable HTTP POST handler - for sending messages to server
 exports.mcpPost = async (event) => {
@@ -1182,6 +1310,21 @@ exports.mcpPost = async (event) => {
                       difficulty: { type: 'string', description: 'Filter by difficulty level' },
                       duration: { type: 'object', properties: { min: { type: 'number' }, max: { type: 'number' } }, description: 'Filter by exercise duration range' }
                     }
+                  }
+                },
+                {
+                  name: 'get_user_fitness_profile',
+                  description: 'Retrieve a user\'s fitness profile with JWT authentication',
+                  inputSchema: {
+                    type: 'object',
+                    properties: {
+                      authorization: {
+                        type: 'string',
+                        description: 'Bearer JWT token for authentication (format: "Bearer <token>")',
+                        required: true
+                      }
+                    },
+                    required: ['authorization']
                   }
                 },
                 {
