@@ -35,78 +35,6 @@ class StreamableHTTPMCPServer {
       return {
         tools: [
           {
-            name: 'get_exercises',
-            description: 'Retrieve exercises from the database with optional filtering',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                limit: {
-                  type: 'number',
-                  description: 'Maximum number of exercises to return (default: 10)',
-                  default: 10
-                },
-                skip: {
-                  type: 'number',
-                  description: 'Number of exercises to skip for pagination (default: 0)',
-                  default: 0
-                },
-                category: {
-                  type: 'string',
-                  description: 'Filter by exercise category'
-                },
-                search: {
-                  type: 'string',
-                  description: 'Search exercises by title or content'
-                }
-              }
-            }
-          },
-          {
-            name: 'get_exercise_by_id',
-            description: 'Retrieve a specific exercise by its ID',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                id: {
-                  type: 'string',
-                  description: 'The exercise ID to retrieve',
-                  required: true
-                }
-              },
-              required: ['id']
-            }
-          },
-          {
-            name: 'search_exercises',
-            description: 'Search exercises with advanced filtering options',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                query: {
-                  type: 'string',
-                  description: 'Search query for exercise content'
-                },
-                categories: {
-                  type: 'array',
-                  items: { type: 'string' },
-                  description: 'Array of category IDs to filter by'
-                },
-                difficulty: {
-                  type: 'string',
-                  description: 'Filter by difficulty level'
-                },
-                duration: {
-                  type: 'object',
-                  properties: {
-                    min: { type: 'number' },
-                    max: { type: 'number' }
-                  },
-                  description: 'Filter by exercise duration range'
-                }
-              }
-            }
-          },
-          {
             name: 'get_user_fitness_profile',
             description: 'Retrieve a user\'s fitness profile with JWT authentication',
             inputSchema: {
@@ -237,12 +165,6 @@ class StreamableHTTPMCPServer {
         await this.ensureDbConnection();
 
         switch (name) {
-          case 'get_exercises':
-            return await this.getExercises(args);
-          case 'get_exercise_by_id':
-            return await this.getExerciseById(args);
-          case 'search_exercises':
-            return await this.searchExercises(args);
           case 'get_user_fitness_profile':
             return await this.getUserFitnessProfile(args);
           case 'create_workout_program':
@@ -377,166 +299,6 @@ class StreamableHTTPMCPServer {
     }
   }
 
-  async getExercises(args = {}) {
-    console.log('getExercises called with args:', args);
-    const { limit = 10, skip = 0, category, search } = args;
-    
-    // Build aggregation pipeline
-    const pipeline = [];
-    
-    // Stage 1: Match exercises with content_metadata
-    const matchStage = {
-      $match: {
-        item_type: 'exercise',
-        content_metadata: { $exists: true, $ne: null }
-      }
-    };
-    
-    // Add category filter if specified
-    if (category) {
-      matchStage.$match.categories = category;
-    }
-    
-    // Add search filter if specified (search in English locale)
-    if (search) {
-      matchStage.$match.$or = [
-        { 'locale.title': { $regex: search, $options: 'i' } },
-        { 'locale.description': { $regex: search, $options: 'i' } }
-      ];
-    }
-    
-    pipeline.push(matchStage);
-    
-    // Stage 2: Add field to extract English locale data
-    pipeline.push({
-      $addFields: {
-        englishLocale: {
-          $arrayElemAt: [
-            {
-              $filter: {
-                input: '$locale',
-                cond: { $eq: ['$$this.language_iso', 'en'] }
-              }
-            },
-            0
-          ]
-        }
-      }
-    });
-    
-    // Stage 3: Project only the required fields
-    pipeline.push({
-      $project: {
-        _id: 1,
-        slug: 1,
-        title: '$englishLocale.title',
-        description: '$englishLocale.description',
-        media: 1,
-        content_metadata: 1,
-        published_at: 1,
-        categories: 1
-      }
-    });
-    
-    // Stage 4: Sort by published_at descending
-    pipeline.push({
-      $sort: { published_at: -1 }
-    });
-    
-    // Stage 5: Skip and limit for pagination
-    if (skip > 0) {
-      pipeline.push({ $skip: skip });
-    }
-    
-    pipeline.push({ $limit: limit });
-
-    console.log('MongoDB aggregation pipeline:', JSON.stringify(pipeline, null, 2));
-    console.log('Query options - limit:', limit, 'skip:', skip);
-
-    try {
-      console.log('Executing MongoDB aggregation...');
-      const startTime = Date.now();
-      
-      const exercises = await ContentItems.aggregate(pipeline);
-      
-      const queryTime = Date.now() - startTime;
-      console.log(`MongoDB aggregation completed in ${queryTime}ms, found ${exercises.length} exercises`);
-      
-      if (exercises.length === 0) {
-        console.log('No exercises found - this might indicate a database connection or data issue');
-      }
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              exercises: exercises.map(exercise => ({
-                id: exercise._id,
-                slug: exercise.slug,
-                title: exercise.title || 'Untitled Exercise',
-                description: exercise.description,
-                media: exercise.media,
-                content_metadata: exercise.content_metadata,
-                published_at: exercise.published_at,
-                categories: exercise.categories
-              })),
-              total: exercises.length,
-              limit,
-              skip
-            }, null, 2)
-          }
-        ]
-      };
-    } catch (error) {
-      console.error('Error in getExercises:', error);
-      throw new Error(`Failed to retrieve exercises: ${error.message}`);
-    }
-  }
-
-  async getExerciseById(args) {
-    const { id } = args;
-    
-    if (!id) {
-      throw new Error('Exercise ID is required');
-    }
-
-    const exercise = await ContentItems.findOne({
-      _id: id,
-      item_type: 'exercise',
-      content_metadata: { $exists: true, $ne: null }
-    })
-    .populate('categories')
-    .populate('creator')
-    .lean();
-
-    if (!exercise) {
-      throw new Error('Exercise not found');
-    }
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            exercise: {
-              id: exercise._id,
-              title: exercise.content?.title || 'Untitled Exercise',
-              description: exercise.content?.description,
-              content: exercise.content,
-              categories: exercise.categories,
-              creator: exercise.creator,
-              published_at: exercise.published_at,
-              content_type: exercise.content_type,
-              media: exercise.media,
-              settings: exercise.settings,
-              sections: exercise.sections
-            }
-          }, null, 2)
-        }
-      ]
-    };
-  }
 
   async getUserFitnessProfile(args) {
     console.log('getUserFitnessProfile called with args:', args);
@@ -600,136 +362,6 @@ class StreamableHTTPMCPServer {
     }
   }
 
-  async searchExercises(args = {}) {
-    console.log('searchExercises called with args:', args);
-    const { query, categories, difficulty, duration } = args;
-    
-    // Build aggregation pipeline
-    const pipeline = [];
-    
-    // Stage 1: Match exercises with content_metadata and search criteria
-    const matchStage = {
-      $match: {
-        item_type: 'exercise',
-        content_metadata: { $exists: true, $ne: null }
-      }
-    };
-
-    // Add categories filter if specified
-    if (categories && categories.length > 0) {
-      matchStage.$match.categories = { $in: categories };
-    }
-
-    // Add difficulty filter if specified
-    if (difficulty) {
-      matchStage.$match['settings.difficulty'] = difficulty;
-    }
-
-    // Add duration filter if specified
-    if (duration) {
-      if (duration.min !== undefined || duration.max !== undefined) {
-        matchStage.$match['settings.duration'] = {};
-        if (duration.min !== undefined) {
-          matchStage.$match['settings.duration'].$gte = duration.min;
-        }
-        if (duration.max !== undefined) {
-          matchStage.$match['settings.duration'].$lte = duration.max;
-        }
-      }
-    }
-
-    pipeline.push(matchStage);
-    
-    // Stage 2: Add field to extract English locale data
-    pipeline.push({
-      $addFields: {
-        englishLocale: {
-          $arrayElemAt: [
-            {
-              $filter: {
-                input: '$locale',
-                cond: { $eq: ['$$this.language_iso', 'en'] }
-              }
-            },
-            0
-          ]
-        }
-      }
-    });
-
-    // Stage 3: Add text search filter if query is specified (search in English locale)
-    if (query) {
-      pipeline.push({
-        $match: {
-          $or: [
-            { 'englishLocale.title': { $regex: query, $options: 'i' } },
-            { 'englishLocale.description': { $regex: query, $options: 'i' } },
-            { 'englishLocale.instructions': { $regex: query, $options: 'i' } }
-          ]
-        }
-      });
-    }
-    
-    // Stage 4: Project only the required fields
-    pipeline.push({
-      $project: {
-        _id: 1,
-        slug: 1,
-        title: '$englishLocale.title',
-        description: '$englishLocale.description',
-        media: 1,
-        content_metadata: 1,
-        published_at: 1,
-        categories: 1,
-        difficulty: '$settings.difficulty',
-        duration: '$settings.duration'
-      }
-    });
-    
-    // Stage 5: Sort by published_at descending
-    pipeline.push({
-      $sort: { published_at: -1 }
-    });
-
-    console.log('searchExercises - MongoDB aggregation pipeline:', JSON.stringify(pipeline, null, 2));
-
-    try {
-      console.log('searchExercises - executing aggregation...');
-      const startTime = Date.now();
-      
-      const exercises = await ContentItems.aggregate(pipeline);
-      
-      const queryTime = Date.now() - startTime;
-      console.log(`searchExercises - aggregation completed in ${queryTime}ms, found ${exercises.length} exercises`);
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              exercises: exercises.map(exercise => ({
-                id: exercise._id,
-                slug: exercise.slug,
-                title: exercise.title || 'Untitled Exercise',
-                description: exercise.description,
-                media: exercise.media,
-                content_metadata: exercise.content_metadata,
-                categories: exercise.categories,
-                difficulty: exercise.difficulty,
-                duration: exercise.duration,
-                published_at: exercise.published_at
-              })),
-              total: exercises.length,
-              searchQuery: args
-            }, null, 2)
-          }
-        ]
-      };
-    } catch (error) {
-      console.error('Error in searchExercises:', error);
-      throw new Error(`Failed to search exercises: ${error.message}`);
-    }
-  }
 
   async getAllExercisesResource() {
     // Build aggregation pipeline for English locale filtering
@@ -1069,12 +701,6 @@ class StreamableHTTPMCPServer {
       await this.ensureDbConnection();
 
       switch (name) {
-        case 'get_exercises':
-          return await this.getExercises(args);
-        case 'get_exercise_by_id':
-          return await this.getExerciseById(args);
-        case 'search_exercises':
-          return await this.searchExercises(args);
         case 'get_user_fitness_profile':
           return await this.getUserFitnessProfile(args);
         case 'create_workout_program':
@@ -1208,43 +834,6 @@ exports.mcpPost = async (event) => {
             id: mcpMessage.id,
             result: {
               tools: [
-                {
-                  name: 'get_exercises',
-                  description: 'Retrieve exercises from the database with optional filtering',
-                  inputSchema: {
-                    type: 'object',
-                    properties: {
-                      limit: { type: 'number', description: 'Maximum number of exercises to return (default: 10)', default: 10 },
-                      skip: { type: 'number', description: 'Number of exercises to skip for pagination (default: 0)', default: 0 },
-                      category: { type: 'string', description: 'Filter by exercise category' },
-                      search: { type: 'string', description: 'Search exercises by title or content' }
-                    }
-                  }
-                },
-                {
-                  name: 'get_exercise_by_id',
-                  description: 'Retrieve a specific exercise by its ID',
-                  inputSchema: {
-                    type: 'object',
-                    properties: {
-                      id: { type: 'string', description: 'The exercise ID to retrieve', required: true }
-                    },
-                    required: ['id']
-                  }
-                },
-                {
-                  name: 'search_exercises',
-                  description: 'Search exercises with advanced filtering options',
-                  inputSchema: {
-                    type: 'object',
-                    properties: {
-                      query: { type: 'string', description: 'Search query for exercise content' },
-                      categories: { type: 'array', items: { type: 'string' }, description: 'Array of category IDs to filter by' },
-                      difficulty: { type: 'string', description: 'Filter by difficulty level' },
-                      duration: { type: 'object', properties: { min: { type: 'number' }, max: { type: 'number' } }, description: 'Filter by exercise duration range' }
-                    }
-                  }
-                },
                 {
                   name: 'get_user_fitness_profile',
                   description: 'Retrieve a user\'s fitness profile with JWT authentication',
@@ -1380,18 +969,6 @@ exports.mcpPost = async (event) => {
                   uri: 'exercise://exercises',
                   name: 'All Exercises',
                   description: 'Complete list of all published exercises',
-                  mimeType: 'application/json'
-                },
-                {
-                  uri: 'exercise://categories',
-                  name: 'Exercise Categories',
-                  description: 'List of all exercise categories',
-                  mimeType: 'application/json'
-                },
-                {
-                  uri: 'exercise://stats',
-                  name: 'Exercise Statistics',
-                  description: 'Statistics about exercises in the database',
                   mimeType: 'application/json'
                 }
               ]
