@@ -123,10 +123,15 @@ class StreamableHTTPMCPServer {
           },
           {
             name: 'create_workout_program',
-            description: 'Create a workout program with multiple workouts in the database',
+            description: 'Create a workout program with multiple workouts in the database (requires JWT authentication)',
             inputSchema: {
               type: 'object',
               properties: {
+                authorization: {
+                  type: 'string',
+                  description: 'Bearer JWT token for authentication (format: "Bearer <token>")',
+                  required: true
+                },
                 program: {
                   type: 'object',
                   properties: {
@@ -135,7 +140,7 @@ class StreamableHTTPMCPServer {
                     description: { type: 'string', description: 'Program description' },
                     slug: { type: 'string', description: 'URL-friendly slug (optional, will be generated if not provided)' },
                     categories: { type: 'array', items: { type: 'string' }, description: 'Array of category IDs' },
-                    creator: { type: 'string', description: 'Creator user ID' },
+                    creator: { type: 'string', description: 'Creator user ID (optional, will use authenticated user if not provided)' },
                     is_premium: { type: 'boolean', description: 'Whether the program is premium', default: false },
                     content_metadata: {
                       type: 'object',
@@ -147,7 +152,7 @@ class StreamableHTTPMCPServer {
                       }
                     }
                   },
-                  required: ['title', 'summary', 'description', 'creator']
+                  required: ['title', 'summary', 'description']
                 },
                 workouts: {
                   type: 'array',
@@ -217,7 +222,7 @@ class StreamableHTTPMCPServer {
                   description: 'Schedule mapping days to workout indices'
                 }
               },
-              required: ['program', 'workouts', 'program_schedule']
+              required: ['authorization', 'program', 'workouts', 'program_schedule']
             }
           }
         ]
@@ -969,7 +974,11 @@ class StreamableHTTPMCPServer {
   async createWorkoutProgram(args) {
     console.log('createWorkoutProgram called with args:', JSON.stringify(args, null, 2));
     
-    const { program, workouts, program_schedule } = args;
+    const { authorization, program, workouts, program_schedule } = args;
+    
+    // Validate JWT token and extract user ID
+    const { userId, decoded } = this.validateJWTToken(authorization);
+    console.log('JWT validation successful for createWorkoutProgram, user ID:', userId);
     
     // Validate required fields
     if (!program || !workouts || !program_schedule) {
@@ -1007,7 +1016,7 @@ class StreamableHTTPMCPServer {
         // Set workout-specific fields
         workoutDoc.slug = workout.slug || this.generateSlug(workout.title);
         workoutDoc.locale = this.createLocaleArray(workout.title, workout.summary, workout.description);
-        workoutDoc.creator = workout.creator;
+        workoutDoc.creator = workout.creator || userId; // Use authenticated user if creator not specified
         workoutDoc.categories = workout.categories || [];
         workoutDoc.settings.is_premium = workout.is_premium || false;
         workoutDoc.content_metadata = workout.content_metadata || {};
@@ -1046,7 +1055,7 @@ class StreamableHTTPMCPServer {
       // Set program-specific fields
       programDoc.slug = program.slug || this.generateSlug(program.title);
       programDoc.locale = this.createLocaleArray(program.title, program.summary, program.description);
-      programDoc.creator = program.creator;
+      programDoc.creator = program.creator || userId; // Use authenticated user if creator not specified
       programDoc.categories = program.categories || [];
       programDoc.settings.is_premium = program.is_premium || false;
       programDoc.content_metadata = program.content_metadata || {};
@@ -1072,10 +1081,12 @@ class StreamableHTTPMCPServer {
             type: 'text',
             text: JSON.stringify({
               success: true,
+              authenticated_user: userId,
               program: {
                 id: savedProgram._id,
                 title: program.title,
                 slug: savedProgram.slug,
+                creator: savedProgram.creator,
                 created_at: savedProgram.created_at
               },
               workouts: createdWorkouts.map((workout, index) => ({
@@ -1329,10 +1340,15 @@ exports.mcpPost = async (event) => {
                 },
                 {
                   name: 'create_workout_program',
-                  description: 'Create a workout program with multiple workouts in the database',
+                  description: 'Create a workout program with multiple workouts in the database (requires JWT authentication)',
                   inputSchema: {
                     type: 'object',
                     properties: {
+                      authorization: {
+                        type: 'string',
+                        description: 'Bearer JWT token for authentication (format: "Bearer <token>")',
+                        required: true
+                      },
                       program: {
                         type: 'object',
                         properties: {
@@ -1423,7 +1439,7 @@ exports.mcpPost = async (event) => {
                         description: 'Schedule mapping days to workout indices'
                       }
                     },
-                    required: ['program', 'workouts', 'program_schedule']
+                    required: ['authorization', 'program', 'workouts', 'program_schedule']
                   }
                 }
               ]
