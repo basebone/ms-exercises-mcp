@@ -6,7 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 const jwt = require('jsonwebtoken');
 
 class StreamableHTTPMCPServer {
-  constructor() {
+  constructor(userContext = null) {
     this.server = new Server(
       {
         name: 'exercise-mcp-server',
@@ -26,6 +26,7 @@ class StreamableHTTPMCPServer {
     );
 
     this.sessions = new Map(); // Track active sessions
+    this.userContext = userContext; // Store authenticated user info
     this.setupHandlers();
   }
 
@@ -36,30 +37,19 @@ class StreamableHTTPMCPServer {
         tools: [
           {
             name: 'get_user_fitness_profile',
-            description: 'Retrieve a user\'s fitness profile with JWT authentication',
+            description: 'Retrieve the authenticated user\'s fitness profile',
             inputSchema: {
               type: 'object',
-              properties: {
-                authorization: {
-                  type: 'string',
-                  description: 'Bearer JWT token for authentication (format: "Bearer <token>")',
-                  required: true
-                }
-              },
-              required: ['authorization']
+              properties: {},
+              required: []
             }
           },
           {
             name: 'create_workout_program',
-            description: 'Create a workout program with multiple workouts in the database (requires JWT authentication)',
+            description: 'Create a workout program with multiple workouts in the database for the authenticated user',
             inputSchema: {
               type: 'object',
               properties: {
-                authorization: {
-                  type: 'string',
-                  description: 'Bearer JWT token for authentication (format: "Bearer <token>")',
-                  required: true
-                },
                 program: {
                   type: 'object',
                   properties: {
@@ -150,7 +140,7 @@ class StreamableHTTPMCPServer {
                   description: 'Schedule mapping days to workout indices'
                 }
               },
-              required: ['authorization', 'program', 'workouts', 'program_schedule']
+              required: ['program', 'workouts', 'program_schedule']
             }
           }
         ]
@@ -256,8 +246,8 @@ class StreamableHTTPMCPServer {
     }
   }
 
-  // Helper function to validate JWT token and extract user ID
-  validateJWTToken(authorization) {
+  // Static helper function to validate JWT token and extract user ID
+  static validateJWTToken(authorization) {
     if (!authorization) {
       throw new Error('Authorization header is required');
     }
@@ -302,11 +292,14 @@ class StreamableHTTPMCPServer {
 
   async getUserFitnessProfile(args) {
     console.log('getUserFitnessProfile called with args:', args);
-    const { authorization } = args;
     
-    // Validate JWT token and extract user ID
-    const { userId, decoded } = this.validateJWTToken(authorization);
-    console.log('JWT validation successful, user ID:', userId);
+    // Use server-level authenticated user context
+    if (!this.userContext) {
+      throw new Error('User authentication required at server level');
+    }
+    
+    const userId = this.userContext.userId;
+    console.log('Using server-level authenticated user ID:', userId);
     
     try {
       // Query the UserFitnessProfile model for the user's fitness profile
@@ -532,11 +525,15 @@ class StreamableHTTPMCPServer {
   async createWorkoutProgram(args) {
     console.log('createWorkoutProgram called with args:', JSON.stringify(args, null, 2));
     
-    const { authorization, program, workouts, program_schedule } = args;
+    const { program, workouts, program_schedule } = args;
     
-    // Validate JWT token and extract user ID
-    const { userId, decoded } = this.validateJWTToken(authorization);
-    console.log('JWT validation successful for createWorkoutProgram, user ID:', userId);
+    // Use server-level authenticated user context
+    if (!this.userContext) {
+      throw new Error('User authentication required at server level');
+    }
+    
+    const userId = this.userContext.userId;
+    console.log('Using server-level authenticated user ID for createWorkoutProgram:', userId);
     
     // Validate required fields
     if (!program || !workouts || !program_schedule) {
@@ -760,9 +757,56 @@ exports.mcpPost = async (event) => {
     body: event.body?.substring(0, 200) + '...'
   });
 
-  const server = new StreamableHTTPMCPServer();
-  
   try {
+    // Extract and validate JWT token from Authorization header
+    const authorization = event.headers?.authorization || event.headers?.Authorization;
+    
+    if (!authorization) {
+      return {
+        statusCode: 401,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          error: {
+            code: -32001,
+            message: 'Authentication required',
+            data: 'Authorization header with Bearer token is required'
+          },
+          id: null
+        })
+      };
+    }
+
+    // Validate JWT token and extract user context
+    let userContext;
+    try {
+      userContext = StreamableHTTPMCPServer.validateJWTToken(authorization);
+      console.log('JWT validation successful, user ID:', userContext.userId);
+    } catch (error) {
+      return {
+        statusCode: 401,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          error: {
+            code: -32001,
+            message: 'Authentication failed',
+            data: error.message
+          },
+          id: null
+        })
+      };
+    }
+
+    // Create server instance with authenticated user context
+    const server = new StreamableHTTPMCPServer(userContext);
+    
     // Validate Origin header for security
     const origin = event.headers?.origin || event.headers?.Origin;
     console.log('Origin validation:', { origin, isValid: server.validateOrigin(origin) });
@@ -836,30 +880,19 @@ exports.mcpPost = async (event) => {
               tools: [
                 {
                   name: 'get_user_fitness_profile',
-                  description: 'Retrieve a user\'s fitness profile with JWT authentication',
+                  description: 'Retrieve the authenticated user\'s fitness profile',
                   inputSchema: {
                     type: 'object',
-                    properties: {
-                      authorization: {
-                        type: 'string',
-                        description: 'Bearer JWT token for authentication (format: "Bearer <token>")',
-                        required: true
-                      }
-                    },
-                    required: ['authorization']
+                    properties: {},
+                    required: []
                   }
                 },
                 {
                   name: 'create_workout_program',
-                  description: 'Create a workout program with multiple workouts in the database (requires JWT authentication)',
+                  description: 'Create a workout program with multiple workouts in the database for the authenticated user',
                   inputSchema: {
                     type: 'object',
                     properties: {
-                      authorization: {
-                        type: 'string',
-                        description: 'Bearer JWT token for authentication (format: "Bearer <token>")',
-                        required: true
-                      },
                       program: {
                         type: 'object',
                         properties: {
@@ -950,7 +983,7 @@ exports.mcpPost = async (event) => {
                         description: 'Schedule mapping days to workout indices'
                       }
                     },
-                    required: ['authorization', 'program', 'workouts', 'program_schedule']
+                    required: ['program', 'workouts', 'program_schedule']
                   }
                 }
               ]
@@ -1040,7 +1073,7 @@ exports.mcpPost = async (event) => {
           headers: {
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type, Accept, Origin',
+            'Access-Control-Allow-Headers': 'Content-Type, Accept, Origin, Authorization',
             'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
           },
           body: JSON.stringify(response)
@@ -1058,7 +1091,7 @@ exports.mcpPost = async (event) => {
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
             'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type, Accept, Origin',
+            'Access-Control-Allow-Headers': 'Content-Type, Accept, Origin, Authorization',
             'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
             'X-Session-ID': sessionId
           },
@@ -1073,7 +1106,7 @@ exports.mcpPost = async (event) => {
           headers: {
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type, Accept, Origin',
+            'Access-Control-Allow-Headers': 'Content-Type, Accept, Origin, Authorization',
             'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
           },
           body: JSON.stringify(response)
@@ -1122,9 +1155,40 @@ exports.mcpPost = async (event) => {
 
 // Streamable HTTP GET handler - for listening to server messages via SSE
 exports.mcpGet = async (event) => {
-  const server = new StreamableHTTPMCPServer();
-  
   try {
+    // Extract and validate JWT token from Authorization header
+    const authorization = event.headers?.authorization || event.headers?.Authorization;
+    
+    if (!authorization) {
+      return {
+        statusCode: 401,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        },
+        body: JSON.stringify({ error: 'Authentication required - Authorization header with Bearer token is required' })
+      };
+    }
+
+    // Validate JWT token and extract user context
+    let userContext;
+    try {
+      userContext = StreamableHTTPMCPServer.validateJWTToken(authorization);
+      console.log('JWT validation successful for GET, user ID:', userContext.userId);
+    } catch (error) {
+      return {
+        statusCode: 401,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        },
+        body: JSON.stringify({ error: 'Authentication failed: ' + error.message })
+      };
+    }
+
+    // Create server instance with authenticated user context
+    const server = new StreamableHTTPMCPServer(userContext);
+    
     // Validate Origin header for security
     const origin = event.headers?.origin || event.headers?.Origin;
     if (!server.validateOrigin(origin)) {
@@ -1190,7 +1254,7 @@ exports.mcpOptions = async (event) => {
     statusCode: 200,
     headers: {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type, Accept, Origin',
+      'Access-Control-Allow-Headers': 'Content-Type, Accept, Origin, Authorization',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
     },
     body: ''
