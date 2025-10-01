@@ -289,6 +289,55 @@ class StreamableHTTPMCPServer {
     }
   }
 
+  // Helper function to calculate age from date of birth
+  calculateAge(dateOfBirth) {
+    if (!dateOfBirth) return null;
+    
+    const today = new Date();
+    const birthDate = new Date(dateOfBirth);
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const monthDiff = today.getMonth() - birthDate.getMonth();
+    
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+      age--;
+    }
+    
+    return age;
+  }
+
+  // Helper function to calculate BMI
+  calculateBMI(weight, height) {
+    if (!weight || !height) return null;
+    
+    // Convert height from cm to meters if needed
+    const heightInMeters = height > 10 ? height / 100 : height;
+    const bmi = weight / (heightInMeters * heightInMeters);
+    
+    return Math.round(bmi * 10) / 10; // Round to 1 decimal place
+  }
+
+  // Helper function to calculate BMR (Basal Metabolic Rate)
+  calculateBMR(weight, height, age, gender) {
+    if (!weight || !height || !age || !gender) return null;
+    
+    // Convert height from cm to meters if needed for calculation
+    const heightInCm = height > 10 ? height : height * 100;
+    
+    // Mifflin-St Jeor Equation
+    let bmr;
+    if (gender.toLowerCase() === 'male' || gender.toLowerCase() === 'm') {
+      bmr = (10 * weight) + (6.25 * heightInCm) - (5 * age) + 5;
+    } else if (gender.toLowerCase() === 'female' || gender.toLowerCase() === 'f') {
+      bmr = (10 * weight) + (6.25 * heightInCm) - (5 * age) - 161;
+    } else {
+      // Use average for non-binary or unspecified
+      const maleBMR = (10 * weight) + (6.25 * heightInCm) - (5 * age) + 5;
+      const femaleBMR = (10 * weight) + (6.25 * heightInCm) - (5 * age) - 161;
+      bmr = (maleBMR + femaleBMR) / 2;
+    }
+    
+    return Math.round(bmr);
+  }
 
   async getUserFitnessProfile(args) {
     console.log('getUserFitnessProfile called with args:', args);
@@ -324,6 +373,23 @@ class StreamableHTTPMCPServer {
 
       console.log('Fitness profile found for user:', userId);
 
+      // Calculate age from date of birth
+      const age = this.calculateAge(fitnessProfile.date_of_birth || fitnessProfile.dateOfBirth || fitnessProfile.birth_date);
+      
+      // Get current weight (try multiple field names)
+      const currentWeight = fitnessProfile.current_weight || fitnessProfile.weight;
+      
+      // Calculate BMI
+      const bmi = this.calculateBMI(currentWeight, fitnessProfile.height);
+      
+      // Calculate BMR
+      const bmr = this.calculateBMR(
+        currentWeight,
+        fitnessProfile.height,
+        age,
+        fitnessProfile.gender
+      );
+
       return {
         content: [
           {
@@ -332,18 +398,16 @@ class StreamableHTTPMCPServer {
               success: true,
               user_id: userId,
               fitness_profile: {
-                id: fitnessProfile._id,
-                user_id: fitnessProfile.user_id,
-                height: fitnessProfile.height,
-                weight: fitnessProfile.weight,
-                age: fitnessProfile.age,
+                fitness_target: fitnessProfile.fitness_target || fitnessProfile.fitness_goals || fitnessProfile.goal || fitnessProfile.fitness_goal,
                 gender: fitnessProfile.gender,
-                activity_level: fitnessProfile.activity_level,
-                fitness_goals: fitnessProfile.fitness_goals,
-                medical_conditions: fitnessProfile.medical_conditions,
-                preferences: fitnessProfile.preferences,
-                created_at: fitnessProfile.created_at,
-                updated_at: fitnessProfile.updated_at
+                current_weight: currentWeight,
+                fitness_level: fitnessProfile.fitness_level || fitnessProfile.activity_level,
+                age: age,
+                height: fitnessProfile.height,
+                target_weight: fitnessProfile.target_weight || fitnessProfile.goal_weight,
+                bmi: bmi,
+                bmr: bmr,
+                physical_limitations: Boolean(fitnessProfile.physical_limitations || fitnessProfile.medical_conditions)
               }
             }, null, 2)
           }
