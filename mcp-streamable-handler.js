@@ -142,6 +142,15 @@ class StreamableHTTPMCPServer {
               },
               required: ['program', 'workouts', 'program_schedule']
             }
+          },
+          {
+            name: 'list_all_exercises',
+            description: 'List all exercises from the database with complete details',
+            inputSchema: {
+              type: 'object',
+              properties: {},
+              required: []
+            }
           }
         ]
       };
@@ -159,6 +168,8 @@ class StreamableHTTPMCPServer {
             return await this.getUserFitnessProfile(args);
           case 'create_workout_program':
             return await this.createWorkoutProgram(args);
+          case 'list_all_exercises':
+            return await this.listAllExercises(args);
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
@@ -586,6 +597,79 @@ class StreamableHTTPMCPServer {
     };
   }
 
+  async listAllExercises(args) {
+    console.log('listAllExercises called with args:', args);
+    
+    try {
+      // Build aggregation pipeline for English locale filtering (same as resource)
+      const pipeline = [
+        // Stage 1: Match exercises with content_metadata
+        {
+          $match: {
+            item_type: 'exercise',
+            content_metadata: { $exists: true, $ne: null }
+          }
+        },
+        
+        // Stage 2: Add field to extract English locale data
+        {
+          $addFields: {
+            englishLocale: {
+              $arrayElemAt: [
+                {
+                  $filter: {
+                    input: '$locale',
+                    cond: { $eq: ['$$this.language_iso', 'en'] }
+                  }
+                },
+                0
+              ]
+            }
+          }
+        },
+        
+        // Stage 3: Project only the required fields
+        {
+          $project: {
+            _id: 1,
+            slug: 1,
+            title: '$englishLocale.title',
+            description: '$englishLocale.description',
+            media: 1,
+            content_metadata: 1
+          }
+        }
+      ];
+
+      console.log('listAllExercises - executing aggregation pipeline');
+      const exercises = await ContentItems.aggregate(pipeline);
+      console.log(`listAllExercises - found ${exercises.length} exercises`);
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              success: true,
+              exercises: exercises.map(exercise => ({
+                id: exercise._id,
+                slug: exercise.slug,
+                title: exercise.title || 'Untitled Exercise',
+                description: exercise.description,
+                media: exercise.media,
+                content_metadata: exercise.content_metadata
+              })),
+              total: exercises.length
+            }, null, 2)
+          }
+        ]
+      };
+    } catch (error) {
+      console.error('Error in listAllExercises:', error);
+      throw new Error(`Failed to list exercises: ${error.message}`);
+    }
+  }
+
   async createWorkoutProgram(args) {
     console.log('createWorkoutProgram called with args:', JSON.stringify(args, null, 2));
     
@@ -766,6 +850,8 @@ class StreamableHTTPMCPServer {
           return await this.getUserFitnessProfile(args);
         case 'create_workout_program':
           return await this.createWorkoutProgram(args);
+        case 'list_all_exercises':
+          return await this.listAllExercises(args);
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
@@ -1048,6 +1134,15 @@ exports.mcpPost = async (event) => {
                       }
                     },
                     required: ['program', 'workouts', 'program_schedule']
+                  }
+                },
+                {
+                  name: 'list_all_exercises',
+                  description: 'List all exercises from the database with complete details',
+                  inputSchema: {
+                    type: 'object',
+                    properties: {},
+                    required: []
                   }
                 }
               ]
