@@ -603,12 +603,12 @@ class StreamableHTTPMCPServer {
     try {
       // Build aggregation pipeline for English locale filtering (same as resource)
       const pipeline = [
-        // Stage 1: Match exercises with content_metadata and slug ending with -f
+        // Stage 1: Match exercises with content_metadata and specific category
         {
           $match: {
             item_type: 'exercise',
             content_metadata: { $exists: true, $ne: null },
-            slug: { $regex: /-f$/ }
+            categories: 'a4e765cb-70d7-477a-984c-9fc25bf99bd1'
           }
         },
         
